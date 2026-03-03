@@ -1,0 +1,25 @@
+FROM node:22-alpine
+
+WORKDIR /app
+
+COPY . .
+
+# Avoid interactive prompts and fix pnpm non-TTY behavior in CI
+ENV CI=true
+
+# Activate pnpm via corepack instead of global npm install
+ENV PNPM_HOME="/root/.local/share/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable && corepack prepare pnpm@latest --activate || true
+
+RUN pnpm install
+
+RUN pnpm prisma generate
+
+RUN pnpm prisma db push
+
+RUN pnpm build
+
+EXPOSE 4000
+
+CMD ["pnpm", "start"]

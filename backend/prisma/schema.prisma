@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator prismaClassGenerator {
+  provider               = "prisma-class-generator"
+  dryRun                 = "false"
+  separateRelationFields = "false"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  /// 계정의 고유 식별자 (cuid)
+  id                String  @id @default(cuid())
+  /// 소유 사용자 ID (users.id 참조)
+  userId            String  @map("user_id")
+  /// 계정 유형 (예: oauth)
+  type              String
+  /// 인증 제공자명 (예: google, github)
+  provider          String
+  /// 제공자 측 계정 식별자
+  providerAccountId String  @map("provider_account_id")
+  /// OAuth 리프레시 토큰
+  refresh_token     String?
+  /// OAuth 액세스 토큰
+  access_token      String?
+  /// 액세스 토큰 만료시각(초 단위 epoch)
+  expires_at        Int?
+  /// 토큰 타입 (예: Bearer)
+  token_type        String?
+  /// 토큰이 가진 권한 범위(scope)
+  scope             String?
+  /// OIDC ID 토큰
+  id_token          String?
+  /// 세션 상태 값
+  session_state     String?
+  /// 소유 사용자 관계
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  /// 세션 고유 식별자 (cuid)
+  id           String   @id @default(cuid())
+  /// 세션 토큰 (고유)
+  sessionToken String   @unique @map("session_token")
+  /// 세션 소유 사용자 ID
+  userId       String   @map("user_id")
+  /// 세션 만료 시각
+  expires      DateTime
+  /// 소유 사용자 관계
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expires])
+  @@map("sessions")
+}
+
+model User {
+  /// 사용자 고유 식별자 (cuid)
+  id             String    @id @default(cuid())
+  /// 사용자 이름
+  name           String?
+  /// 이메일 (고유)
+  email          String?   @unique
+  /// 이메일 인증 시각
+  emailVerified  DateTime? @map("email_verified")
+  /// 해시된 비밀번호
+  hashedPassword String?   @map("hashed_password")
+  /// 우편번호
+  postCode       String?   @map("post_code")
+  /// 기본 주소
+  address        String?
+  /// 상세 주소
+  detailAddress  String?
+  /// 생년월일 (문자열)
+  birth          String?
+  /// 휴대전화 번호
+  mobile         String?
+  /// 사번/회사번호 등 식별 번호
+  companyNumber  String?   @map("company_number")
+  /// 재직 여부
+  isWorking      Boolean   @default(true) @map("is_working")
+  /// 입사 일자
+  joinDate       DateTime  @default(now()) @map("join_date")
+  /// 퇴사 일자
+  quitDate       DateTime? @map("quit_date")
+  /// 생성 시각
+  createdAt      DateTime  @default(now()) @map("created_at")
+  /// 수정 시각
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  /// 성별
+  gender         String?
+
+  accounts         Account[]
+  sessions         Session[]
+  /// 사용자가 접근 가능한 메뉴 목록
+  userMenus        UserMenu[]
+  /// 비밀번호 오류 횟수 (5회 이상 시 차단)
+  passwordBlock    Int        @default(0) @map("password_block")
+  /// 계정 차단 여부
+  isBlocked        Boolean    @default(false) @map("is_blocked")
+  /// 계정 차단 시각
+  blockedAt        DateTime?  @map("blocked_at")
+  /// 개인정보 열람 권한
+  hasPrivacyAccess Boolean    @default(false) @map("has_privacy_access")
+
+  @@index([name])
+  @@index([isWorking])
+  @@index([createdAt])
+  @@index([isBlocked])
+  @@map("users")
+}
+
+model VerificationToken {
+  /// 토큰 식별자 (이메일 등)
+  identifier String
+  /// 검증 토큰 값
+  token      String
+  /// 만료 시각
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@index([identifier])
+  @@map("verification_tokens")
+}
+
+/// 메뉴 정보
+model Menu {
+  /// 메뉴 고유 ID (uuid)
+  id          String   @id @default(uuid())
+  /// 부모 메뉴 ID (계층 구조)
+  parentId    String?  @map("parent_id")
+  /// 메뉴 라벨 (화면에 표시될 텍스트)
+  label       String
+  /// 메뉴 경로 (href)
+  href        String?
+  /// 아이콘명 (Lucide React 아이콘명)
+  icon        String?
+  /// 정렬 순서
+  sortOrder   Int      @default(0) @map("sort_order")
+  /// 메뉴 상태
+  status      String   @default("ACTIVE")
+  /// 관리자 전용 여부
+  isAdminOnly Boolean  @default(false) @map("is_admin_only")
+  /// 메뉴 설명
+  description String?
+  /// 생성 시각
+  createdAt   DateTime @default(now()) @map("created_at")
+  /// 수정 시각
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  /// 부모 메뉴 관계
+  parent    Menu?      @relation("MenuHierarchy", fields: [parentId], references: [id])
+  /// 자식 메뉴 목록
+  children  Menu[]     @relation("MenuHierarchy")
+  /// 이 메뉴에 접근 가능한 사용자 목록
+  userMenus UserMenu[]
+
+  @@index([parentId])
+  @@index([sortOrder])
+  @@index([status])
+  @@index([isAdminOnly])
+  @@map("menus")
+}
+
+/// 사용자-메뉴 접근 권한 (User 1:N Menu 연결)
+model UserMenu {
+  /// 고유 ID (uuid)
+  id        String   @id @default(uuid())
+  /// 사용자 ID
+  userId    String   @map("user_id")
+  /// 메뉴 ID
+  menuId    String   @map("menu_id")
+  /// 생성 시각
+  createdAt DateTime @default(now()) @map("created_at")
+  /// 수정 시각
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  /// 사용자 관계
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 메뉴 관계
+  menu Menu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, menuId])
+  @@index([userId])
+  @@index([menuId])
+  @@map("user_menus")
+}
