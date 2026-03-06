@@ -10,6 +10,7 @@ import { MediaModule } from './media/media.module';
 import { MenusModule } from './menus/menus.module';
 import { AdminPermissionService } from './auth/admin-permission.service';
 import { SecurityModule } from './security/security.module';
+import { DailyModule } from './daily/daily.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { SecurityModule } from './security/security.module';
     MediaModule,
     MenusModule,
     SecurityModule,
+    DailyModule,
   ],
   controllers: [AppController],
   providers: [AppService, AdminPermissionService],

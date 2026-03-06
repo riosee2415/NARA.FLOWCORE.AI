@@ -1,0 +1,195 @@
+/**
+ * 조달청 나라장터 사전규격정보서비스 API 오퍼레이션 목록
+ * 공공데이터포털 기준 (나중에 코드에서 읽어들여 사용 가능)
+ */
+export interface DataGoKrPreSpecOperation {
+  no: number;
+  name: string;
+  path: string;
+  description: string;
+  dailyLimit: number;
+  status: string;
+}
+
+export const DATA_GO_KR_PRE_SPEC_OPERATIONS: DataGoKrPreSpecOperation[] = [
+  {
+    no: 1,
+    name: '사전규격 물품 목록 조회',
+    path: '/getPublicPrcureThngInfoThng',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 변경일시범위, 사전규격등록번호로 입력하여 물품에 대한 사전규격등록번호, 품명, 발주기관명, 수요기관명, 관련 규격문서파일 등 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 2,
+    name: '사전규격 물품 기관별 목록 조회',
+    path: '/getInsttAcctoThngListInfoThng',
+    description:
+      '물품에 대한 사전규격정보를 기관별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 발주기관명, 실수요기관명 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 물품에 대한 나라장터 사전규격정보 기관별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 3,
+    name: '사전규격 물품 품목별 목록 조회',
+    path: '/getThngDetailMetaInfoThng',
+    description:
+      '물품에 대한 사전규격정보를 품목별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 품명으로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 물품에 대한 나라장터 사전규격정보 품목별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 4,
+    name: '사전규격 외자 목록 조회',
+    path: '/getPublicPrcureThngInfoFrgcpt',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 변경일시범위, 사전규격등록번호로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 외자에 대한 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 5,
+    name: '사전규격 외자 기관별 목록 조회',
+    path: '/getInsttAcctoThngListInfoFrgcpt',
+    description:
+      '외자에 대한 사전규격정보를 기관별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 발주기관명, 수요기관명으로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 외자에 대한 나라장터 사전규격정보 기관별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 6,
+    name: '사전규격 외자 품목별 목록 조회',
+    path: '/getThngDetailMetaInfoFrgcpt',
+    description:
+      '외자에 대한 사전규격정보를 품목별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 품명으로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 외자에 대한 나라장터 사전규격정보 품목별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 7,
+    name: '사전규격 용역 목록 조회',
+    path: '/getPublicPrcureThngInfoServc',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 변경일시범위, 사전규격등록번호로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 용역에 대한 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 8,
+    name: '사전규격 용역 기관별 목록 조회',
+    path: '/getInsttAcctoThngListInfoServc',
+    description:
+      '용역에 대한 사전규격정보를 기관별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 발주기관명, 수요기관명으로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 용역에 대한 나라장터 사전규격정보 기관별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 9,
+    name: '사전규격 용역 품목별 목록 조회',
+    path: '/getThngDetailMetaInfoServc',
+    description:
+      '용역에 대한 사전규격정보를 품목별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 품명, 세부품명, 세부품명번호로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 용역에 대한 나라장터 사전규격정보 품목별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 10,
+    name: '사전규격 공사 목록 조회',
+    path: '/getPublicPrcureThngInfoCnstwk',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 변경일시범위, 사전규격등록번호로 입력하여 공사에 대한 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 11,
+    name: '사전규격 공사 기관별 목록 조회',
+    path: '/getInsttAcctoThngListInfoCnstwk',
+    description:
+      '공사에 대한 사전규격정보를 기관별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 발주기관명, 수요기관명으로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 공사에 대한 나라장터 사전규격정보 기관별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 12,
+    name: '사전규격 공사 품목별 목록 조회',
+    path: '/getThngDetailMetaInfoCnstwk',
+    description:
+      '공사에 대한 사전규격정보를 품목별로 조회할 수 있는 오퍼레이션으로 검색조건을 등록일시범위, 품명으로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 공사에 대한 나라장터 사전규격정보 품목별 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 13,
+    name: '나라장터 검색조건에 의한 사전규격 물품 목록 조회',
+    path: '/getPublicPrcureThngInfoThngPPSSrch',
+    description:
+      '검색조건을 조회구분, 접수일시범위, 사전규격등록번호, 참조번호, 공고기관코드, 공고기관명, 수요기관코드, 수요기관명, 품명, SW사업대상여부, 세부품명번호로 입력하여 물품에 대한 사전규격등록번호, 품명, 발주기관명, 수요기관명, 관련 규격문서파일 등 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 14,
+    name: '나라장터 검색조건에 의한 사전규격 외자 목록 조회',
+    path: '/getPublicPrcureThngInfoFrgcptPPSSrch',
+    description:
+      '검색조건을 조회구분, 접수일시범위, 사전규격등록번호, 참조번호, 공고기관코드, 공고기관명, 수요기관코드, 수요기관명, 품명, SW사업대상여부로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 외자에 대한 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 15,
+    name: '나라장터 검색조건에 의한 사전규격 용역 목록 조회',
+    path: '/getPublicPrcureThngInfoServcPPSSrch',
+    description:
+      '검색조건을 조회구분, 접수일시범위, 사전규격등록번호, 참조번호, 공고기관코드, 공고기관명, 수요기관코드, 수요기관명, 품명, SW사업대상여부, 세부품명번호 로 입력하여 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 용역에 대한 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 16,
+    name: '나라장터 검색조건에 의한 사전규격 공사 목록 조회',
+    path: '/getPublicPrcureThngInfoCnstwkPPSSrch',
+    description:
+      '검색조건을 조회구분, 접수일시범위, 사전규격등록번호, 참조번호, 공고기관코드, 공고기관명, 수요기관코드, 수요기관명, 품명으로 입력하여 공사에 대한 사전규격등록번호, 품명, 발주기관, 수요기관, 관련 규격문서파일 등 나라장터 사전규격정보목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 17,
+    name: '나라장터 사전규격 물품 규격서 의견 목록 조회',
+    path: '/getPublicPrcureThngOpinionInfoThng',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 사전규격등록번호로 입력하여 사전규격등록번호, 참조번호, 의견제목, 작성업체명, 작성자명, 입력일시, 작성자전화번호, 작성자이메일, 관련 규격서의견파일, 의견내용 등 나라장터 사전규격 물품 규격서 의견 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 18,
+    name: '나라장터 사전규격 외자 규격서 의견 목록 조회',
+    path: '/getPublicPrcureThngOpinionInfoFrgcpt',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 사전규격등록번호로 입력하여 사전규격등록번호, 참조번호, 의견제목, 작성업체명, 작성자명, 입력일시, 작성자전화번호, 작성자이메일, 관련 규격서의견파일, 의견내용 등 나라장터 사전규격 외자 규격서 의견 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 19,
+    name: '나라장터 사전규격 용역 규격서 의견 목록 조회',
+    path: '/getPublicPrcureThngOpinionInfoServc',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 사전규격등록번호로 입력하여 사전규격등록번호, 참조번호, 의견제목, 작성업체명, 작성자명, 입력일시, 작성자전화번호, 작성자이메일, 관련 규격서의견파일, 의견내용 등 나라장터 사전규격 용역 규격서 의견 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+  {
+    no: 20,
+    name: '나라장터 사전규격 공사 규격서 의견 목록 조회',
+    path: '/getPublicPrcureThngOpinionInfoCnstwk',
+    description:
+      '검색조건을 조회구분, 등록일시범위, 사전규격등록번호로 입력하여 사전규격등록번호, 참조번호, 의견제목, 작성업체명, 작성자명, 입력일시, 작성자전화번호, 작성자이메일, 관련 규격서의견파일, 의견내용 등 나라장터 사전규격 공사 규격서 의견 목록을 조회',
+    dailyLimit: 1000,
+    status: '확인',
+  },
+];
