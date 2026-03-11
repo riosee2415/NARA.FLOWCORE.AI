@@ -3,6 +3,8 @@
  * 추가·수정·삭제 시 이 배열만 변경하면 됨.
  */
 export const REPORT_EMAIL_RECIPIENTS: string[] = [
-  // 'kch@yeslaw.com',
+  'kch@yeslaw.com',
   'shyoon@yeslaw.com',
+  'yhko@yeslaw.com',
+  'fnffn@yeslaw.com',
 ];
