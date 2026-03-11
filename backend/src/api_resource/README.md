@@ -11,9 +11,8 @@
 - 키워드는 수신 목록에서 클라이언트 필터.
 - **활용신청**: [입찰공고정보서비스](https://www.data.go.kr/data/15129394) 활용신청 후 `DATA_GO_KR_BID_SERVICE_KEY` 사용.
 
-## 테스트 (따로 실행)
+## 테스트
 
-- **사전규격만**: `npm run test:pre-spec`
-- **본공고만**: `npm run test:bid`
+- **조달 최근 1개월 전체 (사전규격 + 본공고)**: `npm run test:procurement`
 
 공공데이터 429 완화를 위해 요청 간 300ms 대기 적용.

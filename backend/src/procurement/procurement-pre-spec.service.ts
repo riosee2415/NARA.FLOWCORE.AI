@@ -2,24 +2,40 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DAILY_TASKS } from '../daily/daily.constants';
 import type { DailyTask } from '../daily/daily-task.interface';
+import { PRE_SPEC_KEYWORDS } from '../config/pre-spec-keywords.config';
 import {
   PROCUREMENT_PRE_SPEC_API_BASE,
   PROCUREMENT_BID_API_BASES,
 } from './procurement.constants';
-import { PRE_SPEC_KEYWORDS } from '../config/pre-spec-keywords.config';
-import { normalizeKeyword, titleMatchesKeyword } from './keyword-normalizer';
 import { KeywordExpanderService } from './keyword-expander.service';
+import { normalizeKeyword, titleMatchesKeyword } from './keyword-normalizer';
+import { ReportMailerService } from './report-mailer.service';
+import {
+  printReportStart,
+  printReportEnd,
+  printSection,
+  printStep,
+  printAiPhase,
+  printCount,
+  printReportTable,
+  preSpecToReportRow,
+  bidToReportRow,
+  printAiBusy,
+  printProgressBar,
+  printSuccess,
+  printLiveSection,
+} from './procurement-report.helper';
 
 const LOG_PRE = '*사전규격*';
 const LOG_BID = '*본공고*';
 
-/** 용역 전용: 나라장터 검색조건에 의한 사전규격 용역 목록 조회 (no 15) */
-const SERVC_PPSSRCH = {
-  name: '나라장터 검색조건에 의한 사전규격 용역 목록 조회',
-  path: '/getPublicPrcureThngInfoServcPPSSrch',
+/** 용역 전용: 사전규격 용역 목록 조회 (no 7, 등록일시범위) — API문서 기준 */
+const PRE_SPEC_SERVC_LIST = {
+  name: '사전규격 용역 목록 조회',
+  path: '/getPublicPrcureThngInfoServc',
 } as const;
 
-/** 본공고(입찰공고) 용역 목록 조회 - 등록일시 기준 (PPSSrch는 500 다발로 목록 API 사용 후 클라이언트 키워드 필터) */
+/** 본공고(입찰공고) 용역 목록 조회 - 등록일시 기준 */
 const BID_SERVC_LIST = {
   name: '입찰공고목록 정보에 대한 용역조회',
   path: '/getBidPblancListInfoServc',
@@ -38,10 +54,9 @@ function bidServiceKeyForQuery(apiKey: string): string {
   }
 }
 
-/** 검색 기간(일), 페이지당 건수, 최대 페이지 */
-const SEARCH_DAYS = 30;
+/** 페이지당 건수, 전체 조회 시 최대 페이지 (안전 상한) */
 const ROWS_PER_PAGE = 100;
-const MAX_PAGES = 3;
+const MAX_PAGES_LAST_MONTH_ALL = 100;
 
 /** 공공데이터 429 방지: 요청 간 대기(ms) */
 const REQUEST_DELAY_MS = 300;
@@ -105,6 +120,7 @@ export class ProcurementPreSpecService implements DailyTask {
   constructor(
     private readonly config: ConfigService,
     private readonly keywordExpander: KeywordExpanderService,
+    private readonly reportMailer: ReportMailerService,
   ) {}
 
   async run(): Promise<void> {
@@ -138,269 +154,207 @@ export class ProcurementPreSpecService implements DailyTask {
       );
     }
 
+    printReportStart();
+
+    // 0단계: 등록 키워드 로드 → OpenAI로 매칭용 검색어 배열 확장
+    printSection('1. 키워드 로드 & AI 확장', '◆');
     const keywords = PRE_SPEC_KEYWORDS.map((k) => normalizeKeyword(k)).filter(
       (k) => k.length > 0,
     );
     if (keywords.length === 0) {
       this.logger.warn(
-        `${LOG_PRE} 조회 키워드 없음. config/pre-spec-keywords.config.ts 에 키워드를 추가하세요.`,
+        `${LOG_PRE} 등록 키워드 없음. config/pre-spec-keywords.config.ts 에 키워드를 추가하세요.`,
       );
+      printReportEnd();
       return;
     }
-
-    const useAiExpand =
-      this.config.get<string>('PRE_SPEC_USE_AI_EXPAND') !== 'false';
-
-    // 키워드별 검색어 미리 확장 (두 단계에서 공통 사용)
-    const keywordSearchTerms = new Map<string, string[]>();
-    for (const keyword of keywords) {
-      const searchTerms = useAiExpand
-        ? await this.keywordExpander.expandForSearch(keyword)
-        : [keyword];
-      keywordSearchTerms.set(keyword, searchTerms);
-      if (searchTerms.length > 1) {
-        this.logger.log(
-          `[${keyword}] AI 확장 검색어 ${searchTerms.length}개: ${searchTerms.slice(0, 4).join(', ')}${searchTerms.length > 4 ? '...' : ''}`,
-        );
-      }
+    printStep('등록 키워드 로드', `${keywords.length}개`);
+    printAiPhase('OpenAI로 관련/동의어·축약어 분석 중...');
+    const expandedTerms =
+      await this.keywordExpander.expandAllForMatching(keywords);
+    if (expandedTerms.length === 0) {
+      this.logger.warn(`${LOG_PRE} 확장된 매칭어 없음. 조회 스킵.`);
+      printReportEnd();
+      return;
     }
+    printStep('매칭용 검색어 확장 완료', `${expandedTerms.length}개`);
+    printSuccess(`AI 확장 키워드 ${expandedTerms.length}개 준비 완료`);
 
-    // 1단계: 사전규격 (모든 키워드 조회 + 데이터 정리) 완료 후
+    let preSpecRows: Record<string, string>[] = [];
+    let bidRows: Record<string, string>[] = [];
+
+    // 1단계: 사전규격 수집 → 확장 키워드로 매칭
     if (runPreSpec && hasPreSpec && apiKey) {
-      this.logger.log(`${LOG_PRE} 사전규격 단계 시작`);
-      for (const keyword of keywords) {
-        const searchTerms = keywordSearchTerms.get(keyword) ?? [keyword];
-        const preSpecItems = await this.fetchPreSpec(
-          apiKey,
-          keyword,
-          searchTerms,
-        );
-        if (preSpecItems.length > 0) {
-          this.logger.log(
-            `${LOG_PRE} [${keyword}] 사전규격(용역) 조회: 키워드 매칭 ${preSpecItems.length}건`,
-          );
-          console.log(
-            `\n${LOG_PRE} [사전규격 조회 결과] 키워드: "${keyword}" (${preSpecItems.length}건)\n`,
-          );
-          console.log(JSON.stringify(preSpecItems, null, 2));
-        }
-        const preSpecCleaned = this.cleanPreSpecData(preSpecItems);
-        if (preSpecCleaned.length > 0) {
-          this.logger.log(
-            `${LOG_PRE} [${keyword}] 데이터 정리 완료: ${preSpecCleaned.length}건`,
-          );
-        }
+      printSection('2. 사전규격 수집 & 키워드 매칭', '◆');
+      printStep('사전규격 API 조회', '최근 2일');
+      const preSpecRaw = await this.fetchPreSpecLastMonthAll(apiKey);
+      printCount('수집 건수', preSpecRaw.length);
+      const preSpecMatched = this.filterByExpandedTerms(
+        preSpecRaw,
+        expandedTerms,
+        (item) =>
+          [item.prdctNm, item.bsnsNm, item.prdctClsfcNm]
+            .filter(Boolean)
+            .map(String)
+            .join(' '),
+      );
+      printCount('키워드 매칭 건수', preSpecMatched.length, preSpecRaw.length);
+      const preSpecCleaned = this.cleanPreSpecData(preSpecMatched);
+      preSpecRows = preSpecCleaned.map(preSpecToReportRow);
+      printReportTable('사전규격 매칭 결과 (보고용)', preSpecRows);
+      if (preSpecCleaned.length > 0) {
+        printSuccess(`사전규격 데이터 정리 완료: ${preSpecCleaned.length}건`);
       }
-      this.logger.log(`${LOG_PRE} 사전규격 단계 완료`);
+      printSuccess('사전규격 단계 완료');
     }
 
-    // 2단계: 본공고 (사전규격 단계 완료 후 순차 실행)
+    // 2단계: 본공고 수집 → 확장 키워드로 매칭
     if (runBid && hasBid && bidApiKey) {
-      this.logger.log(`${LOG_BID} 본공고 단계 시작`);
-      for (const keyword of keywords) {
-        this.logger.log(`${LOG_BID} [${keyword}] 조회 시작`);
-        const searchTerms = keywordSearchTerms.get(keyword) ?? [keyword];
-        const bidItems = await this.fetchBidAnnouncements(
-          bidApiKey,
-          keyword,
-          searchTerms,
-        );
-        if (bidItems.length > 0) {
-          this.logger.log(
-            `${LOG_BID} [${keyword}] 조회 완료: 있음 ${bidItems.length}건`,
-          );
-          console.log(
-            `\n${LOG_BID} [본공고 조회 결과] 키워드: "${keyword}" (${bidItems.length}건)\n`,
-          );
-          console.log(JSON.stringify(bidItems, null, 2));
-        } else {
-          this.logger.log(`${LOG_BID} [${keyword}] 조회 완료: 없음`);
-        }
+      printSection('3. 본공고 수집 & 키워드 매칭', '◆');
+      printLiveSection(
+        '본공고 실시간 수집 대시보드',
+        'AI가 입찰 공고를 수집·검증 중입니다',
+      );
+      printStep('본공고 API 조회', '최근 2일');
+      const progressInterval = setInterval(() => {
+        printAiBusy();
+      }, 5000);
+      let bidRaw: Array<Record<string, unknown>> = [];
+      try {
+        bidRaw = await this.fetchBidAnnouncementsLastMonthAll(bidApiKey);
+      } finally {
+        clearInterval(progressInterval);
       }
-      this.logger.log(`${LOG_BID} 본공고 단계 완료`);
-
-      // 키워드 없이 최근 N건만 조회하여 출력
-      const latestCount = 10;
-      this.logger.log(
-        `${LOG_BID} 최근 ${latestCount}건 조회(키워드 없음) 시작`,
+      printSuccess(`본공고 수집 완료: 총 ${bidRaw.length}건`);
+      printCount('수집 건수', bidRaw.length);
+      const bidMatched = this.filterByExpandedTerms(
+        bidRaw,
+        expandedTerms,
+        (item) =>
+          [item.bidNtceNm, item.prdctNm, item.bsnsNm]
+            .filter(Boolean)
+            .map(String)
+            .join(' '),
       );
-      const latestBids = await this.fetchBidAnnouncementsLatest(
-        bidApiKey,
-        latestCount,
-      );
-      if (latestBids.length > 0) {
-        this.logger.log(
-          `${LOG_BID} 최근 ${latestCount}건 조회 완료: ${latestBids.length}건`,
-        );
-        console.log(`\n${LOG_BID} [최근 본공고 ${latestCount}건]\n`);
-        console.log(JSON.stringify(latestBids, null, 2));
+      printCount('키워드 매칭 건수', bidMatched.length, bidRaw.length);
+      bidRows = bidMatched.map(bidToReportRow);
+      printReportTable('본공고 매칭 결과 (보고용)', bidRows);
+      if (bidMatched.length === 0) {
+        printSuccess('본공고 키워드 매칭: 0건 (수집 완료)');
       } else {
-        this.logger.log(`${LOG_BID} 최근 ${latestCount}건 조회 완료: 없음`);
+        printSuccess(`본공고 매칭 완료: ${bidMatched.length}건`);
       }
+      printSuccess('본공고 단계 완료');
     }
+
+    printReportEnd();
+
+    // 수집 결과 이메일 자동 전송 (수신자: config/email-recipients.config.ts)
+    const runAt = new Date().toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul',
+    });
+    await this.reportMailer.sendProcurementReport({
+      preSpecRows,
+      bidRows,
+      runAt,
+      baseKeywords: keywords,
+      expandedTerms,
+    });
   }
 
   /**
-   * 사전규격 최근 N건 조회 (최근 1달 기준, 키워드 없음)
-   * - "심플 테스트" 용도로 사용 (콘솔 출력/수동 검증)
+   * 수집된 항목을 확장 키워드 배열로 필터: 제목/품명이 어떤 확장어와라도 매칭되면 포함.
    */
-  async fetchPreSpecLatest(
-    limit = 10,
-  ): Promise<Array<Record<string, unknown>>> {
-    const apiKey = this.config.get<string>('DATA_GO_KR_SERVICE_KEY');
-    if (!apiKey?.trim()) {
-      this.logger.warn(
-        `${LOG_PRE} 최근 ${limit}건 조회 스킵: DATA_GO_KR_SERVICE_KEY 미설정`,
-      );
-      return [];
-    }
-
-    const raw = await this.fetchPreSpecLatestRaw(apiKey, limit);
-    const cleaned = this.cleanPreSpecData(raw);
-    return cleaned.slice(0, limit);
+  private filterByExpandedTerms(
+    items: Array<Record<string, unknown>>,
+    expandedTerms: string[],
+    getSearchableText: (item: Record<string, unknown>) => string,
+  ): Array<Record<string, unknown>> {
+    return items.filter((item) => {
+      const text = getSearchableText(item);
+      if (!text) return false;
+      return expandedTerms.some((term) => titleMatchesKeyword(text, term));
+    });
   }
 
   /**
-   * 사전규격(용역) 조회
+   * 사전규격(용역) 최근 2일 전체 조회 (키워드/필터 없음, 모든 페이지)
    */
-  private async fetchPreSpec(
+  private async fetchPreSpecLastMonthAll(
     apiKey: string,
-    originalKeyword: string,
-    searchTerms: string[],
-  ): Promise<Array<Record<string, unknown>>> {
-    const { inqryBgnDt, inqryEndDt } = this.getDefaultDateRange();
-    const seenIds = new Set<string>();
-    const allItems: Array<Record<string, unknown>> = [];
-
-    for (const term of searchTerms) {
-      for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
-        try {
-          const url = new URL(
-            `${PROCUREMENT_PRE_SPEC_API_BASE}${SERVC_PPSSRCH.path}`,
-          );
-          url.searchParams.set('serviceKey', encodeURIComponent(apiKey));
-          url.searchParams.set('pageNo', String(pageNo));
-          url.searchParams.set('numOfRows', String(ROWS_PER_PAGE));
-          url.searchParams.set('type', 'json');
-          url.searchParams.set('inqryBgnDt', inqryBgnDt);
-          url.searchParams.set('inqryEndDt', inqryEndDt);
-          url.searchParams.set('prdctNm', term);
-
-          const res = await fetch(url.toString());
-          await sleep(REQUEST_DELAY_MS);
-          if (!res.ok) {
-            this.logger.warn(
-              `${LOG_PRE} [${originalKeyword}] "${term}" p.${pageNo} API HTTP ${res.status}`,
-            );
-            break;
-          }
-          const data = (await res.json()) as DataGoKrResponse;
-          const header = data?.response?.header;
-          if (header?.resultCode && header.resultCode !== '00') {
-            this.logger.warn(
-              `${LOG_PRE} [${originalKeyword}] "${term}" resultCode=${header.resultCode} ${header.resultMsg ?? ''}`,
-            );
-            break;
-          }
-          const list = extractItemsFromBody(data?.response?.body);
-          if (list.length === 0) break;
-
-          for (const item of list) {
-            const id =
-              (item.bfSpecRgstNo as string) ??
-              (item.specRgstNo as string) ??
-              (item.pblancId as string) ??
-              '';
-            const key = id || JSON.stringify(item);
-            if (seenIds.has(key)) continue;
-            const title =
-              (item.prdctNm as string) ??
-              (item.bsnsNm as string) ??
-              (item.prdctClsfcNm as string) ??
-              '';
-            const matchesAny = searchTerms.some((t) =>
-              titleMatchesKeyword(String(title), t),
-            );
-            if (matchesAny) {
-              seenIds.add(key);
-              allItems.push(item);
-            }
-          }
-          if (list.length < ROWS_PER_PAGE) break;
-        } catch (err) {
-          this.logger.error(
-            `${LOG_PRE} [${originalKeyword}] "${term}" p.${pageNo} 조회 실패: ${err instanceof Error ? err.message : err}`,
-          );
-          break;
-        }
-      }
-    }
-    return allItems;
-  }
-
-  /**
-   * 사전규격(용역) 최근 N건 조회 (키워드 없음)
-   * - 1페이지로만 가져오되, regDt 기준으로 정렬 후 limit 만큼 반환
-   */
-  private async fetchPreSpecLatestRaw(
-    apiKey: string,
-    limit: number,
   ): Promise<Array<Record<string, unknown>>> {
     const { inqryBgnDt, inqryEndDt } = this.getPreSpecLastMonthRange();
-    const rows = Math.min(100, Math.max(limit, 30));
+    const seenIds = new Set<string>();
+    const allItems: Array<Record<string, unknown>> = [];
+    let pageNo = 1;
 
-    try {
-      const url = new URL(
-        `${PROCUREMENT_PRE_SPEC_API_BASE}${SERVC_PPSSRCH.path}`,
-      );
-      url.searchParams.set('serviceKey', encodeURIComponent(apiKey));
-      url.searchParams.set('pageNo', '1');
-      url.searchParams.set('numOfRows', String(rows));
-      url.searchParams.set('type', 'json');
-      url.searchParams.set('inqryBgnDt', inqryBgnDt);
-      url.searchParams.set('inqryEndDt', inqryEndDt);
+    for (;;) {
+      printAiBusy({
+        message: `사전규격 페이지 ${pageNo} 조회 중`,
+        page: pageNo,
+        count: allItems.length,
+      });
+      try {
+        const url = new URL(
+          `${PROCUREMENT_PRE_SPEC_API_BASE}${PRE_SPEC_SERVC_LIST.path}`,
+        );
+        url.searchParams.set('serviceKey', encodeURIComponent(apiKey));
+        url.searchParams.set('inqryDiv', '1'); // 1: 등록일시 기준 (문서 필수)
+        url.searchParams.set('pageNo', String(pageNo));
+        url.searchParams.set('numOfRows', String(ROWS_PER_PAGE));
+        url.searchParams.set('type', 'json');
+        url.searchParams.set('inqryBgnDt', inqryBgnDt);
+        url.searchParams.set('inqryEndDt', inqryEndDt);
 
-      const maxAttempts = 3;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const res = await fetch(url.toString());
         await sleep(REQUEST_DELAY_MS);
 
-        if (res.status === 429 && attempt < maxAttempts) {
-          const backoffMs = 1000 * attempt;
-          this.logger.warn(
-            `${LOG_PRE} 최근 ${limit}건 HTTP 429 → ${backoffMs}ms 대기 후 재시도 (${attempt}/${maxAttempts})`,
-          );
-          await sleep(backoffMs);
-          continue;
-        }
-
         if (!res.ok) {
           this.logger.warn(
-            `${LOG_PRE} 최근 ${limit}건 API HTTP ${res.status} (호출 실패)`,
+            `${LOG_PRE} 최근 2일 전체 p.${pageNo} API HTTP ${res.status}`,
           );
-          return [];
+          break;
         }
 
         const data = (await res.json()) as DataGoKrResponse;
         const header = data?.response?.header;
         if (header?.resultCode && header.resultCode !== '00') {
           this.logger.warn(
-            `${LOG_PRE} 최근 ${limit}건 resultCode=${header.resultCode} ${header.resultMsg ?? ''} (API 오류)`,
+            `${LOG_PRE} 최근 2일 전체 p.${pageNo} resultCode=${header.resultCode} ${header.resultMsg ?? ''}`,
           );
-          return [];
+          break;
         }
 
         const list = extractItemsFromBody(data?.response?.body);
-        list.sort((a, b) => this.regDtScore(b) - this.regDtScore(a));
-        return list.slice(0, limit);
+        for (const item of list) {
+          const id =
+            (item.bfSpecRgstNo as string) ??
+            (item.specRgstNo as string) ??
+            (item.pblancId as string) ??
+            '';
+          const key = id || JSON.stringify(item);
+          if (seenIds.has(key)) continue;
+          seenIds.add(key);
+          allItems.push(item);
+        }
+
+        if (list.length < ROWS_PER_PAGE) break;
+        pageNo++;
+        if (pageNo > MAX_PAGES_LAST_MONTH_ALL) {
+          this.logger.log(
+            `${LOG_PRE} 최근 2일 전체 ${MAX_PAGES_LAST_MONTH_ALL}페이지까지 조회 완료 (${allItems.length}건)`,
+          );
+          break;
+        }
+      } catch (err) {
+        this.logger.error(
+          `${LOG_PRE} 최근 2일 전체 p.${pageNo} 조회 실패: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        break;
       }
-      return [];
-    } catch (err) {
-      this.logger.error(
-        `${LOG_PRE} 최근 ${limit}건 조회 실패: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return [];
     }
+
+    return allItems;
   }
 
   /**
@@ -435,49 +389,24 @@ export class ProcurementPreSpecService implements DailyTask {
       .filter((x): x is Record<string, unknown> => x != null);
   }
 
-  /** regDt 기반 정렬용 점수 (파싱 실패 시 0) */
-  private regDtScore(item: Record<string, unknown>): number {
-    const raw = item.regDt;
-    if (typeof raw !== 'string') return 0;
-    const s = raw.replace(/[^\d]/g, '');
-    // 기대 형식: YYYYMMDDhhmm (혹은 YYYYMMDD)
-    if (s.length >= 12) {
-      const y = Number(s.slice(0, 4));
-      const mo = Number(s.slice(4, 6));
-      const d = Number(s.slice(6, 8));
-      const h = Number(s.slice(8, 10));
-      const mi = Number(s.slice(10, 12));
-      const t = new Date(y, mo - 1, d, h, mi).getTime();
-      return Number.isFinite(t) ? t : 0;
-    }
-    if (s.length >= 8) {
-      const y = Number(s.slice(0, 4));
-      const mo = Number(s.slice(4, 6));
-      const d = Number(s.slice(6, 8));
-      const t = new Date(y, mo - 1, d).getTime();
-      return Number.isFinite(t) ? t : 0;
-    }
-    return 0;
-  }
-
   /**
-   * 본공고(입찰공고) 용역 조회
-   * - 활용명세/테스트 스크립트와 동일 패턴: ad/BidPublicInfoService + getBidPblancListInfoServc
-   * - 필수: ServiceKey·inqryDiv·inqryBgnDt·inqryEndDt·pageNo·numOfRows·type=json
-   * - 날짜: YYYYMMDDhhmm(12자), 서버에서는 전체 목록, 클라이언트에서 키워드 필터
+   * 본공고(입찰공고) 최근 2일 전체 조회 (키워드/필터 없음, 모든 페이지)
    */
-  private async fetchBidAnnouncements(
+  private async fetchBidAnnouncementsLastMonthAll(
     apiKey: string,
-    originalKeyword: string,
-    searchTerms: string[],
   ): Promise<Array<Record<string, unknown>>> {
-    // 심플 테스트 스크립트와 동일하게 "최근 1개월" 기준
     const { inqryBgnDt, inqryEndDt } = this.getBidLastMonthRange();
     const seenIds = new Set<string>();
     const allItems: Array<Record<string, unknown>> = [];
     let resolvedBase: string | null = null;
+    let pageNo = 1;
 
-    for (let pageNo = 1; pageNo <= MAX_PAGES; pageNo++) {
+    for (;;) {
+      printAiBusy({
+        message: `페이지 ${pageNo} 입찰 데이터 수집 중`,
+        page: pageNo,
+        count: allItems.length,
+      });
       const basesToTry = resolvedBase
         ? [resolvedBase]
         : [...PROCUREMENT_BID_API_BASES];
@@ -509,7 +438,7 @@ export class ProcurementPreSpecService implements DailyTask {
             const header = data?.response?.header;
             if (header?.resultCode && header.resultCode !== '00') {
               this.logger.warn(
-                `${LOG_BID} [${originalKeyword}] p.${pageNo} resultCode=${header.resultCode} ${header.resultMsg ?? ''}`,
+                `${LOG_BID} 최근 2일 전체 p.${pageNo} resultCode=${header.resultCode} ${header.resultMsg ?? ''}`,
               );
               return allItems;
             }
@@ -522,21 +451,18 @@ export class ProcurementPreSpecService implements DailyTask {
                 '';
               const key = id || JSON.stringify(item);
               if (seenIds.has(key)) continue;
-              const title =
-                (item.bidNtceNm as string) ??
-                (item.prdctNm as string) ??
-                (item.bsnsNm as string) ??
-                '';
-              const matchesAny = searchTerms.some((t) =>
-                titleMatchesKeyword(String(title), t),
-              );
-              if (matchesAny) {
-                seenIds.add(key);
-                allItems.push(item);
-              }
+              seenIds.add(key);
+              allItems.push(item);
             }
-            if (list.length < ROWS_PER_PAGE) break;
-            break; /* 이 Base로 성공했으므로 다음 페이지로 */
+            if (list.length < ROWS_PER_PAGE) return allItems;
+            pageNo++;
+            if (pageNo > MAX_PAGES_LAST_MONTH_ALL) {
+              this.logger.log(
+                `${LOG_BID} 최근 2일 전체 ${MAX_PAGES_LAST_MONTH_ALL}페이지까지 조회 완료 (${allItems.length}건)`,
+              );
+              return allItems;
+            }
+            break;
           }
 
           if (res.status === 500 && responseText) {
@@ -546,16 +472,16 @@ export class ProcurementPreSpecService implements DailyTask {
                 unknown
               >;
               this.logger.warn(
-                `${LOG_BID} [${originalKeyword}] p.${pageNo} Base ${base} → 500: ${JSON.stringify(errBody)}`,
+                `${LOG_BID} 최근 2일 전체 p.${pageNo} Base ${base} → 500: ${JSON.stringify(errBody)}`,
               );
             } catch {
               this.logger.warn(
-                `${LOG_BID} [${originalKeyword}] p.${pageNo} Base ${base} → 500 본문: ${responseText.slice(0, 300)}`,
+                `${LOG_BID} 최근 2일 전체 p.${pageNo} Base ${base} → 500 본문: ${responseText.slice(0, 300)}`,
               );
             }
           } else {
             this.logger.warn(
-              `${LOG_BID} [${originalKeyword}] p.${pageNo} Base ${base} HTTP ${res.status}`,
+              `${LOG_BID} 최근 2일 전체 p.${pageNo} Base ${base} HTTP ${res.status}`,
             );
           }
         } catch (err) {
@@ -566,130 +492,35 @@ export class ProcurementPreSpecService implements DailyTask {
                 ? err.message
                 : String(err);
           this.logger.warn(
-            `${LOG_BID} [${originalKeyword}] p.${pageNo} Base ${base} 예외: ${msg}`,
+            `${LOG_BID} 최근 2일 전체 p.${pageNo} Base ${base} 예외: ${msg}`,
           );
         }
       }
 
       if (lastStatus !== 200) break;
     }
+
     return allItems;
   }
 
-  /**
-   * 본공고 최근 N건 조회 (키워드 없음, 날짜 기준 1페이지만)
-   */
-  private async fetchBidAnnouncementsLatest(
-    apiKey: string,
-    limit: number,
-  ): Promise<Array<Record<string, unknown>>> {
-    // 심플 테스트 스크립트와 동일하게 "최근 1개월" 기준
-    const { inqryBgnDt, inqryEndDt } = this.getBidLastMonthRange();
-
-    for (const base of PROCUREMENT_BID_API_BASES) {
-      try {
-        const url = new URL(`${base}${BID_SERVC_LIST.path}`);
-        url.searchParams.set('ServiceKey', bidServiceKeyForQuery(apiKey));
-        url.searchParams.set('inqryDiv', '1');
-        url.searchParams.set('inqryBgnDt', inqryBgnDt);
-        url.searchParams.set('inqryEndDt', inqryEndDt);
-        url.searchParams.set('pageNo', '1');
-        url.searchParams.set('numOfRows', String(limit));
-        url.searchParams.set('type', 'json');
-
-        const res = await fetchWithTimeout(
-          url.toString(),
-          BID_FETCH_TIMEOUT_MS,
-        );
-        await sleep(REQUEST_DELAY_MS);
-        const responseText = await res.text();
-
-        if (!res.ok) {
-          this.logger.warn(
-            `${LOG_BID} 최근 ${limit}건 Base ${base} HTTP ${res.status} (API 실패)`,
-          );
-          if (res.status === 500 && responseText) {
-            try {
-              const errBody = JSON.parse(responseText) as Record<
-                string,
-                unknown
-              >;
-              this.logger.warn(
-                `${LOG_BID} 최근 ${limit}건 500 응답: ${JSON.stringify(errBody).slice(0, 400)}`,
-              );
-            } catch {
-              this.logger.warn(
-                `${LOG_BID} 최근 ${limit}건 500 본문: ${responseText.slice(0, 300)}`,
-              );
-            }
-          }
-          continue;
-        }
-
-        const data = JSON.parse(responseText) as DataGoKrResponse;
-        const header = data?.response?.header;
-        const body = data?.response?.body;
-
-        if (header?.resultCode && header.resultCode !== '00') {
-          this.logger.warn(
-            `${LOG_BID} 최근 ${limit}건 resultCode=${header.resultCode} ${header.resultMsg ?? ''} (API 오류)`,
-          );
-          continue;
-        }
-
-        const list = extractItemsFromBody(body);
-        if (list.length === 0 && body) {
-          this.logger.warn(
-            `${LOG_BID} 최근 ${limit}건 응답 200 but 데이터 0건 — body keys: ${Object.keys(body).join(', ')} totalCount=${(body as { totalCount?: number }).totalCount ?? 'n/a'}`,
-          );
-        }
-        return list;
-      } catch (err) {
-        const msg =
-          err instanceof Error && err.name === 'AbortError'
-            ? `요청 타임아웃(${BID_FETCH_TIMEOUT_MS / 1000}초)`
-            : err instanceof Error
-              ? err.message
-              : String(err);
-        this.logger.warn(
-          `${LOG_BID} 최근 ${limit}건 Base ${base} 예외: ${msg} (API 실패)`,
-        );
-      }
-    }
-    this.logger.warn(
-      `${LOG_BID} 최근 ${limit}건 — 모든 Base 호출 실패. 인증키·활용신청·URL 확인 필요.`,
-    );
-    return [];
-  }
-
-  private getDefaultDateRange(): { inqryBgnDt: string; inqryEndDt: string } {
-    const now = new Date();
-    const end = new Date(now);
-    const start = new Date(now);
-    start.setDate(start.getDate() - SEARCH_DAYS);
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
-    return { inqryBgnDt: fmt(start), inqryEndDt: fmt(end) };
-  }
-
-  /** 사전규격 전용: 최근 1달 조회 범위 */
+  /** 사전규격 전용: 최근 2일 조회 범위 */
   private getPreSpecLastMonthRange(): {
     inqryBgnDt: string;
     inqryEndDt: string;
   } {
     const end = new Date();
     const start = new Date();
-    start.setMonth(start.getMonth() - 1);
+    start.setDate(start.getDate() - 2);
     const fmt = (d: Date) =>
       `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
     return { inqryBgnDt: fmt(start), inqryEndDt: fmt(end) };
   }
 
-  /** 본공고 전용: 최근 1개월 조회 범위 (심플 테스트와 동일) */
+  /** 본공고 전용: 최근 2일 조회 범위 */
   private getBidLastMonthRange(): { inqryBgnDt: string; inqryEndDt: string } {
     const end = new Date();
     const start = new Date();
-    start.setMonth(start.getMonth() - 1);
+    start.setDate(start.getDate() - 2);
     const fmt = (d: Date) =>
       `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
     return { inqryBgnDt: fmt(start), inqryEndDt: fmt(end) };

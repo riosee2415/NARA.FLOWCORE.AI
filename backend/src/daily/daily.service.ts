@@ -14,25 +14,40 @@ export class DailyService {
   ) {}
 
   /**
-   * 매일 오전 8시 30분(KST)에 등록된 모든 DailyTask 순차 실행
+   * 등록된 모든 DailyTask 순차 실행 (공통)
    */
-  @Cron('30 8 * * *', { timeZone: 'Asia/Seoul' })
-  async handleDailyMorning() {
+  private async runAllTasks(label: string): Promise<void> {
     if (this.tasks.length === 0) {
-      this.logger.log('등록된 아침 작업 없음');
+      this.logger.log(`[${label}] 등록된 작업 없음`);
       return;
     }
-    this.logger.log(`아침 작업 시작 (총 ${this.tasks.length}개)`);
+    this.logger.log(`[${label}] 작업 시작 (총 ${this.tasks.length}개)`);
     for (const task of this.tasks) {
       try {
         await task.run();
-        this.logger.log(`[${task.name}] 완료`);
+        this.logger.log(`[${label}] [${task.name}] 완료`);
       } catch (err) {
         this.logger.error(
-          `[${task.name}] 실패: ${err instanceof Error ? err.message : err}`,
+          `[${label}] [${task.name}] 실패: ${err instanceof Error ? err.message : err}`,
         );
       }
     }
-    this.logger.log('아침 작업 종료');
+    this.logger.log(`[${label}] 작업 종료`);
+  }
+
+  /**
+   * 매일 오전 9시(KST) — 조달 수집 등 DailyTask 실행
+   */
+  @Cron('0 9 * * *', { timeZone: 'Asia/Seoul' })
+  async handleDaily9am() {
+    await this.runAllTasks('오전 9시');
+  }
+
+  /**
+   * 매일 오후 3시(KST) — 조달 수집 등 DailyTask 실행
+   */
+  @Cron('0 15 * * *', { timeZone: 'Asia/Seoul' })
+  async handleDaily3pm() {
+    await this.runAllTasks('오후 3시');
   }
 }
