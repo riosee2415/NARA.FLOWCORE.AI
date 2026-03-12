@@ -11,6 +11,9 @@ import { MenusModule } from './menus/menus.module';
 import { AdminPermissionService } from './auth/admin-permission.service';
 import { SecurityModule } from './security/security.module';
 import { DailyModule } from './daily/daily.module';
+import { LawTimesModule } from './lawtimes/lawtimes.module';
+import { JudgmentNewsModule } from './judgment-news/judgment-news.module';
+import { LawNewsDailyModule } from './law-news-daily/law-news-daily.module';
 
 @Module({
   imports: [
@@ -23,6 +26,9 @@ import { DailyModule } from './daily/daily.module';
     MenusModule,
     SecurityModule,
     DailyModule,
+    LawTimesModule,
+    JudgmentNewsModule,
+    LawNewsDailyModule,
   ],
   controllers: [AppController],
   providers: [AppService, AdminPermissionService],

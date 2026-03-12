@@ -83,6 +83,152 @@ export class ReportMailerService {
     }
   }
 
+  /**
+   * 법률신문 크롤링 결과 보고 메일 (아이로 → 나라아이넷 DB 동기화 요약)
+   * 수신자: config/email-recipients.config.ts
+   */
+  async sendLawNewsReport(payload: {
+    runAt: string;
+    legal: {
+      total: number;
+      created: number;
+      skipped: number;
+      newTitles: string[];
+    };
+    judgment: {
+      total: number;
+      created: number;
+      skipped: number;
+      newTitles: string[];
+    };
+  }): Promise<boolean> {
+    const user = this.config.get<string>('EMAIL_USER')?.trim();
+    const pass = this.config.get<string>('EMAIL_KEY')?.trim();
+    if (!user || !pass) {
+      this.logger.warn(
+        'EMAIL_USER 또는 EMAIL_KEY 미설정 — 법률 뉴스 보고 메일 발송 스킵',
+      );
+      return false;
+    }
+    const toList = REPORT_EMAIL_RECIPIENTS.filter((e) =>
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e),
+    );
+    if (toList.length === 0) {
+      this.logger.warn('유효한 수신자 없음 — 법률 뉴스 보고 메일 발송 스킵');
+      return false;
+    }
+
+    const subject = `[AI 아이로] 법률신문 크롤링·DB 동기화 보고 ${payload.runAt}`;
+    const html = this.buildLawNewsReportHtml(payload);
+
+    try {
+      const transporter = nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        auth: { user, pass },
+      });
+      await transporter.sendMail({
+        from: `"AI 아이로 · 나라아이넷" <${user}>`,
+        to: toList.join(', '),
+        subject,
+        html,
+        text: `${subject}\n\n법원 뉴스: 가져온 ${payload.legal.total}건, 기존 보유 ${payload.legal.skipped}건, 신규 ${payload.legal.created}건\n판결기사: 가져온 ${payload.judgment.total}건, 기존 보유 ${payload.judgment.skipped}건, 신규 ${payload.judgment.created}건`,
+      });
+      this.logger.log(`법률 뉴스 보고 메일 발송 완료: ${toList.length}명`);
+      return true;
+    } catch (err) {
+      this.logger.error(
+        `법률 뉴스 보고 메일 발송 실패: ${err instanceof Error ? err.message : err}`,
+      );
+      return false;
+    }
+  }
+
+  private buildLawNewsReportHtml(payload: {
+    runAt: string;
+    legal: {
+      total: number;
+      created: number;
+      skipped: number;
+      newTitles: string[];
+    };
+    judgment: {
+      total: number;
+      created: number;
+      skipped: number;
+      newTitles: string[];
+    };
+  }): string {
+    const { runAt, legal, judgment } = payload;
+    const titleList = (titles: string[]) =>
+      titles.length === 0
+        ? '<p style="margin:0;font-size:13px;color:#888;">없음</p>'
+        : titles
+            .map(
+              (t, i) =>
+                `<li style="margin:4px 0;line-height:1.45;">${escapeHtml(t)}</li>`,
+            )
+            .join('');
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>법률신문 크롤링 보고</title>
+</head>
+<body style="margin:0;padding:0;background:#f0f4f8;font-family:'Malgun Gothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+  <div style="max-width:640px;margin:0 auto;padding:24px 20px;">
+    <!-- 헤더 -->
+    <div style="background:linear-gradient(135deg, #1e5193 0%, #2d6bb5 100%);border-radius:16px;padding:28px 24px;color:#fff;box-shadow:0 8px 24px rgba(30,81,147,0.25);margin-bottom:24px;">
+      <div style="font-size:20px;font-weight:700;margin-bottom:6px;">🤖 AI 아이로 · 법률신문 크롤링 보고</div>
+      <div style="font-size:14px;opacity:0.95;line-height:1.6;">
+        인공지능 <strong>AI 아이로</strong>가 법률신문을 크롤링하여 얻은 데이터입니다.<br/>
+        나라아이넷(주)이 보유한 데이터베이스와 비교하여 <strong>없는 내용만 추가</strong>했습니다.
+      </div>
+      <div style="font-size:12px;opacity:0.9;margin-top:12px;">실행 시각: ${escapeHtml(runAt)}</div>
+    </div>
+
+    <!-- 요약 카드 -->
+    <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:24px;">
+      <div style="flex:1 1 280px;min-width:0;background:#fff;border-radius:12px;padding:20px;border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+        <div style="font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">법원 뉴스</div>
+        <div style="font-size:28px;font-weight:700;color:#1e5193;">가져온 데이터 <span style="color:#334155;">${legal.total}</span>건</div>
+        <div style="font-size:13px;color:#64748b;margin-top:6px;">나라아이넷 보유 <strong>${legal.skipped}</strong>건 · DB 신규 추가 <strong style="color:#0ea5e9;">${legal.created}</strong>건</div>
+      </div>
+      <div style="flex:1 1 280px;min-width:0;background:#fff;border-radius:12px;padding:20px;border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+        <div style="font-size:12px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">판결기사</div>
+        <div style="font-size:28px;font-weight:700;color:#1e5193;">가져온 데이터 <span style="color:#334155;">${judgment.total}</span>건</div>
+        <div style="font-size:13px;color:#64748b;margin-top:6px;">나라아이넷 보유 <strong>${judgment.skipped}</strong>건 · DB 신규 추가 <strong style="color:#0ea5e9;">${judgment.created}</strong>건</div>
+      </div>
+    </div>
+
+    <!-- 법원 뉴스 신규 타이틀 -->
+    <div style="background:#fff;border-radius:12px;padding:20px;border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,0.04);margin-bottom:20px;">
+      <div style="font-size:15px;font-weight:700;color:#1e5193;margin-bottom:12px;">📰 법원 뉴스 — DB에 새로 들어간 기사 (${legal.newTitles.length}건)</div>
+      <ul style="margin:0;padding-left:20px;font-size:13px;color:#334155;">
+        ${titleList(legal.newTitles)}
+      </ul>
+    </div>
+
+    <!-- 판결기사 신규 타이틀 -->
+    <div style="background:#fff;border-radius:12px;padding:20px;border:1px solid #e2e8f0;box-shadow:0 2px 8px rgba(0,0,0,0.04);">
+      <div style="font-size:15px;font-weight:700;color:#1e5193;margin-bottom:12px;">⚖️ 판결기사 — DB에 새로 들어간 기사 (${judgment.newTitles.length}건)</div>
+      <ul style="margin:0;padding-left:20px;font-size:13px;color:#334155;">
+        ${titleList(judgment.newTitles)}
+      </ul>
+    </div>
+
+    <div style="text-align:center;margin-top:28px;font-size:11px;color:#94a3b8;">
+      본 메일은 매일 오전 10시·오후 5시 자동 수집 후 발송됩니다. · 나라아이넷(주)
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
   private buildReportHtml(payload: {
     preSpecRows: Record<string, string>[];
     bidRows: Record<string, string>[];

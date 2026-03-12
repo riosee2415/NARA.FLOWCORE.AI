@@ -19,6 +19,6 @@ import { ReportMailerService } from './report-mailer.service';
       multi: true;
     },
   ],
-  exports: [DAILY_TASKS, ProcurementPreSpecService],
+  exports: [DAILY_TASKS, ProcurementPreSpecService, ReportMailerService],
 })
 export class ProcurementModule {}

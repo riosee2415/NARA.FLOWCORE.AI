@@ -194,3 +194,105 @@ model UserMenu {
   @@index([menuId])
   @@map("user_menus")
 }
+
+/// 외부 법률 뉴스/기사 저장 테이블
+model LegalNews {
+  /// 고유 ID (cuid)
+  id String @id @default(cuid())
+
+  /// 원본 사이트명 (예: "법률신문 (lawtimes.co.kr)")
+  sourceSite String @map("source_site")
+
+  /// 원본 기사 URL
+  sourceUrl String @unique @map("source_url")
+
+  /// 사이트 내부 기사 식별자 (예: idxno 값)
+  sourceArticleId String? @map("source_article_id")
+
+  /// 1차 섹션 (예: "법원")
+  section String?  @map("section")
+
+  /// 2차 섹션/분류 (예: "대법원")
+  subSection String? @map("sub_section")
+
+  /// 기사 제목
+  title String
+
+  /// 목록에서 수집한 짧은 요약
+  summary String? @db.Text
+
+  /// 메타/요약 description
+  description String? @db.Text
+
+  /// 전체 본문 텍스트
+  content String @db.Text
+
+  /// 기자명 (예: "한민아 기자")
+  reporter String?
+
+  /// 기사 게재 시각 (사이트 기준)
+  publishedAt DateTime? @map("published_at")
+
+  /// 최초 크롤링 시각
+  crawledAt DateTime @default(now()) @map("crawled_at")
+
+  /// 마지막 동기화 시각
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([sourceSite])
+  @@index([publishedAt])
+  @@index([section, subSection])
+  @@map("legal_news")
+}
+
+/// 판결기사(판결 큐레이션) 저장 테이블
+model JudgmentNews {
+  /// 고유 ID (cuid)
+  id String @id @default(cuid())
+
+  /// 원본 사이트명 (예: "법률신문 (lawtimes.co.kr)")
+  sourceSite String @map("source_site")
+
+  /// 원본 기사 URL
+  sourceUrl String @unique @map("source_url")
+
+  /// 사이트 내부 기사 식별자 (예: idxno 값)
+  sourceArticleId String? @map("source_article_id")
+
+  /// 1차 섹션 (예: "판결큐레이션")
+  section String? @map("section")
+
+  /// 2차 섹션/분류 (예: "판결기사" 또는 "대법원")
+  subSection String? @map("sub_section")
+
+  /// 기사 제목
+  title String
+
+  /// 목록에서 수집한 짧은 요약
+  summary String? @db.Text
+
+  /// 메타/요약 description
+  description String? @db.Text
+
+  /// 전체 본문 텍스트
+  content String @db.Text
+
+  /// 기자명 (예: "이상우 기자")
+  reporter String?
+
+  /// 기사 게재 시각 (사이트 기준)
+  publishedAt DateTime? @map("published_at")
+
+  /// 최초 크롤링 시각
+  crawledAt DateTime @default(now()) @map("crawled_at")
+
+  /// 마지막 동기화 시각
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([sourceSite])
+  @@index([publishedAt])
+  @@index([section, subSection])
+  @@map("judgment_news")
+}
+
+
