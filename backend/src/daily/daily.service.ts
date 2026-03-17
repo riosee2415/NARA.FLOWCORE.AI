@@ -10,19 +10,25 @@ export class DailyService {
   constructor(
     @Optional()
     @Inject(DAILY_TASKS)
-    private readonly tasks: DailyTask[] = [],
+    private readonly tasks: DailyTask[] | DailyTask | undefined = [],
   ) {}
 
   /**
    * 등록된 모든 DailyTask 순차 실행 (공통)
    */
   private async runAllTasks(label: string): Promise<void> {
-    if (this.tasks.length === 0) {
+    const tasksArray: DailyTask[] = Array.isArray(this.tasks)
+      ? this.tasks
+      : this.tasks
+        ? [this.tasks]
+        : [];
+
+    if (tasksArray.length === 0) {
       this.logger.log(`[${label}] 등록된 작업 없음`);
       return;
     }
-    this.logger.log(`[${label}] 작업 시작 (총 ${this.tasks.length}개)`);
-    for (const task of this.tasks) {
+    this.logger.log(`[${label}] 작업 시작 (총 ${tasksArray.length}개)`);
+    for (const task of tasksArray) {
       try {
         await task.run();
         this.logger.log(`[${label}] [${task.name}] 완료`);
