@@ -7,7 +7,7 @@ export class LawTimesController {
 
   /**
    * 테스트용 수동 크롤링 엔드포인트
-   * 예) GET /lawtimes/manual?pages=3
+   * 예) GET /api/lawtimes/manual?pages=3
    */
   @Get('manual')
   async manualCrawl(
@@ -38,7 +38,7 @@ export class LawTimesController {
 
   /**
    * 크롤링 + DB 저장까지 한 번에 수행하는 엔드포인트
-   * 예) POST /lawtimes/syncRecent?pages=3
+   * 예) GET /api/lawtimes/syncRecent?pages=3
    */
   @Get('syncRecent')
   async syncRecent(

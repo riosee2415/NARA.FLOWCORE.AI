@@ -2,6 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  cleanTitle,
+  extractArticleId,
+  parsePublishedDate,
+} from '../common/law-crawler.utils';
+import {
+  printSection,
+  printStep,
+  printAiBusy,
+  printCount,
+  printSuccess,
+  printLiveSection,
+} from '../common/law-crawler-console.helper';
 
 export interface JudgmentNewsArticle {
   title: string;
@@ -30,21 +43,6 @@ export class JudgmentNewsService {
   };
 
   constructor(private readonly prisma: PrismaService) {}
-
-  /**
-   * "[속보]", "[단독]" 등 제목 맨 앞의 대괄호 태그를 제거
-   */
-  private cleanTitle(raw: string): string {
-    if (!raw) return '';
-    let title = raw;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const next = title.replace(/^\s*\[[^\]]*\]\s*/u, '');
-      if (next === title) break;
-      title = next;
-    }
-    return title.trim();
-  }
 
   private async fetchDetailMeta(url: string): Promise<{
     description: string;
@@ -187,7 +185,7 @@ export class JudgmentNewsService {
 
         const $titleLink = $item.find('h2.altlist-subject a').first();
         const rawTitle = $titleLink.text() || '';
-        const title = this.cleanTitle(rawTitle.replace(/\s+/g, ' ').trim());
+        const title = cleanTitle(rawTitle.replace(/\s+/g, ' ').trim());
 
         const href = $titleLink.attr('href') || '';
         const url = href.startsWith('http') ? href : `${this.BASE_URL}${href}`;
@@ -269,32 +267,29 @@ export class JudgmentNewsService {
     this.logger.log(
       `[LawTimes-판결][전체] AI가 최신 판결기사 1페이지를 정밀 수집합니다...`,
     );
+
+    printLiveSection(
+      '판결기사 실시간 수집 대시보드',
+      'AI가 판결기사를 수집·검증 중입니다',
+    );
+    printSection('1. 판결기사 수집 (법률신문)', '◆');
+    printStep('판결기사 API', '1페이지 크롤링');
+
     const articles = await this.crawlPage();
+
+    printAiBusy({
+      message: '판결기사 페이지 조회 중',
+      page: 1,
+      count: articles.length,
+    });
+    printCount('수집 건수', articles.length);
+    printSuccess('판결기사 수집 완료');
 
     this.logger.log(
       `[LawTimes-판결][전체] 전체 분석 완료 — 총 ${articles.length}건의 판결 기사를 확보했습니다.`,
     );
 
     return articles;
-  }
-
-  private extractArticleId(url: string): string | null {
-    try {
-      const u = new URL(url);
-      const idxno = u.searchParams.get('idxno');
-      return idxno;
-    } catch {
-      return null;
-    }
-  }
-
-  private parsePublishedDate(dateStr: string): Date | null {
-    if (!dateStr) return null;
-    // 예: "2026-03-11"
-    const trimmed = dateStr.trim();
-    if (!trimmed) return null;
-    const parsed = new Date(trimmed);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   async saveArticlesToDb(articles: JudgmentNewsArticle[]): Promise<{
@@ -310,9 +305,8 @@ export class JudgmentNewsService {
       return { total: 0, created: 0, skipped: 0, newTitles: [] };
     }
 
-    this.logger.log(
-      `[LawTimes-판결][DB] AI가 DB 동기화 시퀀스를 시작했습니다. 총 후보: ${articles.length}건`,
-    );
+    printSection('2. DB 동기화 (판결기사)', '◆');
+    printStep('기존 DB 분석', '중복 URL 제거');
 
     const urls = articles.map((a) => a.url);
 
@@ -323,15 +317,11 @@ export class JudgmentNewsService {
 
     const existingUrlSet = new Set(existing.map((e) => e.sourceUrl));
 
-    this.logger.log(
-      `[LawTimes-판결][DB] 기존 DB 분석 완료 — 이미 저장된 URL ${existingUrlSet.size}건.`,
-    );
-
     const newArticles = articles.filter((a) => !existingUrlSet.has(a.url));
 
-    this.logger.log(
-      `[LawTimes-판결][DB] AI가 신규 후보를 선별했습니다 — 새로 추가할 기사 ${newArticles.length}건.`,
-    );
+    printCount('가져온 데이터', articles.length);
+    printCount('나라아이넷 보유', existingUrlSet.size, articles.length);
+    printCount('신규 추가', newArticles.length, articles.length);
 
     if (!newArticles.length) {
       this.logger.log(
@@ -348,8 +338,8 @@ export class JudgmentNewsService {
     const now = new Date();
 
     const data = newArticles.map((a) => {
-      const articleId = this.extractArticleId(a.url);
-      const parsedDate = this.parsePublishedDate(a.date);
+      const articleId = extractArticleId(a.url);
+      const parsedDate = parsePublishedDate(a.date);
 
       return {
         sourceSite: a.source || '법률신문',
@@ -367,15 +357,6 @@ export class JudgmentNewsService {
       };
     });
 
-    const titlesPreview = newArticles
-      .slice(0, 5)
-      .map((a) => `- ${a.title}`)
-      .join('\n');
-
-    this.logger.log(
-      `[LawTimes-판결][DB] AI가 다음 판결 기사들을 새로 추가합니다 (최대 5개 미리보기):\n${titlesPreview}`,
-    );
-
     const result = await this.prisma.judgmentNews.createMany({
       data,
       skipDuplicates: true,
@@ -384,6 +365,8 @@ export class JudgmentNewsService {
     const created = result.count;
     const skipped = articles.length - created;
     const newTitles = newArticles.map((a) => a.title);
+
+    printSuccess('판결기사 DB 동기화 완료');
 
     this.logger.log(
       `[LawTimes-판결][DB] 동기화 완료 — 새로 추가: ${created}건, 건너뜀(중복 포함): ${skipped}건.`,

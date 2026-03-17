@@ -14,6 +14,7 @@ import { DailyModule } from './daily/daily.module';
 import { LawTimesModule } from './lawtimes/lawtimes.module';
 import { JudgmentNewsModule } from './judgment-news/judgment-news.module';
 import { LawNewsDailyModule } from './law-news-daily/law-news-daily.module';
+import { LtnModule } from './ltn/ltn.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { LawNewsDailyModule } from './law-news-daily/law-news-daily.module';
     LawTimesModule,
     JudgmentNewsModule,
     LawNewsDailyModule,
+    LtnModule,
   ],
   controllers: [AppController],
   providers: [AppService, AdminPermissionService],

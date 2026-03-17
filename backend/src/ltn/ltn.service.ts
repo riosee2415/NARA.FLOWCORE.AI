@@ -6,6 +6,7 @@ import {
   cleanTitle,
   extractArticleId,
   parsePublishedDate,
+  stripLtnPrefix,
 } from '../common/law-crawler.utils';
 import {
   printSection,
@@ -16,7 +17,7 @@ import {
   printLiveSection,
 } from '../common/law-crawler-console.helper';
 
-export interface LawTimesArticle {
+export interface LtnArticle {
   title: string;
   url: string;
   summary: string;
@@ -30,10 +31,10 @@ export interface LawTimesArticle {
 }
 
 @Injectable()
-export class LawTimesService {
-  private readonly logger = new Logger(LawTimesService.name);
+export class LtnService {
+  private readonly logger = new Logger(LtnService.name);
 
-  private readonly BASE_URL = 'https://www.lawtimes.co.kr';
+  private readonly BASE_URL = 'https://www.ltn.kr';
   private readonly LIST_URL = `${this.BASE_URL}/news/articleList.html`;
 
   private readonly DEFAULT_HEADERS = {
@@ -45,15 +46,15 @@ export class LawTimesService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * 개별 기사 상세 페이지에서 meta 정보 추출
-   * - description: meta[name="description"] 또는 NewsArticle.description
-   * - content: 화면에 실제로 보이는 전체 본문 텍스트
-   * - source: meta[name="Copyright"] 또는 og:site_name, 기본값 '법률신문'
+   * 상세 페이지에서 description, content, source 추출
+   * - 본문/요약에서 "[법률방송뉴스]" 제거
    */
   private async fetchDetailMeta(url: string): Promise<{
     description: string;
     source: string;
     content: string;
+    reporter: string;
+    date: string;
   }> {
     try {
       const response = await axios.get(url, {
@@ -64,14 +65,11 @@ export class LawTimesService {
       const html: string = response.data;
       const $ = cheerio.load(html);
 
-      // 1순위: meta[name="description"]
-      let rawDescription = $('meta[name="description"]').attr('content') || '';
-      rawDescription =
-        rawDescription ||
+      let rawDescription =
+        $('meta[name="description"]').attr('content') ||
         $('meta[property="og:description"]').attr('content') ||
         '';
 
-      // 보조로 JSON-LD NewsArticle.description 사용 시도
       if (!rawDescription) {
         const ldJson = $('script[type="application/ld+json"]').first().html();
         if (ldJson) {
@@ -86,58 +84,89 @@ export class LawTimesService {
         }
       }
 
-      const description = (rawDescription || '').replace(/\s+/g, ' ').trim();
+      const description = stripLtnPrefix(
+        (rawDescription || '').replace(/\s+/g, ' ').trim(),
+      );
 
-      // 기사 본문 전체 텍스트 추출
+      // 본문: #article-view-content-div 또는 .article-view-content 등
+      const $content =
+        $('#article-view-content-div').length > 0
+          ? $('#article-view-content-div')
+          : $('[id*="article-view"], .article-body, .view-content').first();
+
       const paragraphs: string[] = [];
-      $('#article-view-content-div p').each((_, elem) => {
+      $content.find('p').each((_, elem) => {
         const text = $(elem).text().replace(/\s+/g, ' ').trim();
         if (text) {
-          paragraphs.push(text);
+          paragraphs.push(stripLtnPrefix(text));
         }
       });
-      const content = paragraphs.join('\n\n');
+      const content = stripLtnPrefix(paragraphs.join('\n\n') || description);
 
-      // 사이트명과 도메인을 기준으로 출처 생성
-      const siteNameMeta =
+      const siteName =
         $('meta[property="og:site_name"]').attr('content') ||
         $('meta[name="title"]').attr('content') ||
         '';
 
       let hostname = '';
       try {
-        const parsedUrl = new URL(url);
-        hostname = parsedUrl.hostname.replace(/^www\./, '');
+        const u = new URL(url);
+        hostname = u.hostname.replace(/^www\./, '');
       } catch {
-        // URL 파싱 실패 시 그대로 둠
+        // ignore
       }
+      const source = hostname
+        ? `${(siteName || '법률방송뉴스').trim()} (${hostname})`
+        : (siteName || '법률방송뉴스').trim();
 
-      const baseName = (siteNameMeta || hostname || '법률신문').trim();
-      const source = hostname ? `${baseName} (${hostname})` : baseName;
+      // 기자/날짜: byline 등
+      const byline = $('.byline, .article-byline, .writer').first().text();
+      const dateEl =
+        $('meta[property="article:published_time"]').attr('content') ||
+        $('.byline em, .date').first().text();
+      const reporter = (byline || '')
+        .replace(/\s+/g, ' ')
+        .replace(/\d{4}\.\d{2}\.\d{2}.*$/, '')
+        .trim();
+      const date =
+        typeof dateEl === 'string' && dateEl.includes('.')
+          ? dateEl
+          : $('.byline em').first().text() || '';
 
-      return { description, source, content };
+      return {
+        description,
+        source,
+        content: content || description,
+        reporter: reporter || '',
+        date: date.trim(),
+      };
     } catch (error) {
       const message =
         error instanceof Error ? error.message : JSON.stringify(error);
-      this.logger.warn(
-        `[LawTimes] 상세 메타 크롤 실패 - url=${url} / ${message}`,
-      );
-      return { description: '', source: '법률신문', content: '' };
+      this.logger.warn(`[LTN] 상세 크롤 실패 - url=${url} / ${message}`);
+      return {
+        description: '',
+        source: '법률방송뉴스 (ltn.kr)',
+        content: '',
+        reporter: '',
+        date: '',
+      };
     }
   }
 
   /**
-   * 실제 목록 페이지 크롤링 핵심 로직
+   * 목록 페이지 1페이지 크롤링 (중요뉴스 SRN2, 요약형 sm)
    */
-  async crawlPage(page: number = 1): Promise<LawTimesArticle[]> {
-    this.logger.log(`[LawTimes] 크롤링 시작 - page=${page}`);
+  async crawlPage(page: number = 1): Promise<LtnArticle[]> {
+    this.logger.log(`[LTN] 크롤링 시작 - page=${page}`);
 
     try {
       const response = await axios.get(this.LIST_URL, {
         params: {
-          sc_sub_section_code: 'S2N1', // 법원 섹션
-          view_type: 'sm', // 요약형 리스트
           page,
+          sc_serial_code: 'SRN2',
+          view_type: 'sm',
+          box_idxno: 0,
         },
         headers: this.DEFAULT_HEADERS,
         timeout: 10000,
@@ -147,34 +176,28 @@ export class LawTimesService {
       const $ = cheerio.load(html);
 
       const baseArticles: Omit<
-        LawTimesArticle,
+        LtnArticle,
         'description' | 'source' | 'content'
       >[] = [];
 
-      $('ul.altlist-webzine > li.altlist-webzine-item').each((_, elem) => {
+      $('#section-list .type-sm li').each((_, elem) => {
         const $item = $(elem);
 
-        const $titleLink = $item.find('h2.altlist-subject a').first();
+        const $titleLink = $item.find('.view-cont H2.titles a').first();
         const rawTitle = $titleLink.text() || '';
         const title = cleanTitle(rawTitle.replace(/\s+/g, ' ').trim());
         const href = ($titleLink.attr('href') || '').trim();
 
-        if (!title || !href) {
-          return;
-        }
+        if (!title || !href) return;
 
         const url = href.startsWith('http') ? href : `${this.BASE_URL}${href}`;
 
-        const rawSummary = $item.find('p.altlist-summary').text() || '';
-        const summary = rawSummary.replace(/\s+/g, ' ').trim();
+        const rawLead = $item.find('.view-cont p.lead a').text() || '';
+        const summary = stripLtnPrefix(rawLead.replace(/\s+/g, ' ').trim());
 
-        const $infoItems = $item.find('div.altlist-info .altlist-info-item');
-        const reporter = ($infoItems.eq(0).text() || '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        const date = ($infoItems.eq(1).text() || '').trim();
+        const dateStr = $item.find('.view-cont span.byline em').text() || '';
 
-        const $img = $item.find('a.altlist-image img').first();
+        const $img = $item.find('a.thumb img').first();
         const src = ($img.attr('src') || '').trim();
         const imageUrl = src || null;
 
@@ -182,64 +205,61 @@ export class LawTimesService {
           title,
           url,
           summary,
-          reporter,
-          date,
+          reporter: '',
+          date: dateStr.trim(),
           imageUrl,
-          section: '법원',
+          section: '중요뉴스',
         });
       });
 
-      // 각 기사 상세 페이지에서 description / source / content 보강
-      const articles: LawTimesArticle[] = await Promise.all(
+      const articles: LtnArticle[] = await Promise.all(
         baseArticles.map(async (item) => {
           const meta = await this.fetchDetailMeta(item.url);
           return {
             ...item,
-            description: meta.description || meta.content,
+            description: meta.description || meta.content || item.summary,
             source: meta.source,
-            content: meta.content,
+            content: meta.content || meta.description || item.summary,
+            reporter: meta.reporter || item.reporter,
+            date: meta.date || item.date,
           };
         }),
       );
 
-      this.logger.log(
-        `[LawTimes] page=${page} 크롤링 완료 - ${articles.length}건`,
-      );
+      this.logger.log(`[LTN] page=${page} 크롤링 완료 - ${articles.length}건`);
 
       return articles;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : JSON.stringify(error);
-      this.logger.error(`[LawTimes] 크롤링 실패 - page=${page} / ${message}`);
+      this.logger.error(`[LTN] 크롤링 실패 - page=${page} / ${message}`);
       return [];
     }
   }
 
   /**
-   * 여러 페이지를 순차적으로 크롤링 (테스트 기본값: 1페이지)
+   * 여러 페이지 순차 크롤링 (기본 3페이지)
    */
-  async crawlRecent(pages: number = 3): Promise<LawTimesArticle[]> {
-    const maxPages = Math.max(3, pages);
+  async crawlRecent(pages: number = 3): Promise<LtnArticle[]> {
+    const maxPages = Math.max(1, pages);
 
-    this.logger.log(
-      `[LawTimes] 최근 기사 크롤링 시작 - 요청 pages=${pages}, 실제 pages=${maxPages}`,
-    );
+    this.logger.log(`[LTN] 최근 기사 크롤링 시작 - pages=${maxPages}`);
 
     printLiveSection(
-      '법원 뉴스 실시간 수집 대시보드',
-      'AI가 법원 뉴스를 수집·검증 중입니다',
+      '법률방송뉴스(중요뉴스) 실시간 수집 대시보드',
+      'AI가 법률방송뉴스를 수집·검증 중입니다',
     );
-    printSection('1. 법원 뉴스 수집 (법률신문)', '◆');
-    printStep('법원 뉴스 API', `최근 ${maxPages}페이지 크롤링`);
+    printSection('1. 법률방송뉴스 수집 (ltn.kr 중요뉴스)', '◆');
+    printStep('법률방송뉴스 API', `최근 ${maxPages}페이지 크롤링`);
 
-    const all: LawTimesArticle[] = [];
+    const all: LtnArticle[] = [];
 
     for (let page = 1; page <= maxPages; page += 1) {
-      this.logger.log(`[LawTimes] 페이지 크롤링 순서 - page=${page}`);
+      this.logger.log(`[LTN] 페이지 - page=${page}`);
       const pageArticles = await this.crawlPage(page);
       all.push(...pageArticles);
       printAiBusy({
-        message: '법원 뉴스 페이지 조회 중',
+        message: '법률방송뉴스 페이지 조회 중',
         page,
         count: all.length,
       });
@@ -249,7 +269,7 @@ export class LawTimesService {
       }
     }
 
-    const unique = new Map<string, LawTimesArticle>();
+    const unique = new Map<string, LtnArticle>();
     for (const article of all) {
       if (!unique.has(article.url)) {
         unique.set(article.url, article);
@@ -257,32 +277,29 @@ export class LawTimesService {
     }
 
     const result = Array.from(unique.values());
-    this.logger.log(`[LawTimes] 최근 기사 크롤링 종료 - 총 ${result.length}건`);
+    this.logger.log(`[LTN] 최근 기사 크롤링 종료 - 총 ${result.length}건`);
 
     printCount('수집 건수', result.length);
-    printSuccess('법원 뉴스 수집 완료');
+    printSuccess('법률방송뉴스 수집 완료');
 
     return result;
   }
 
   /**
-   * 크롤링한 기사들을 DB에 저장
-   * 1) 전체 크롤링 결과 중 URL 기준으로 중복 제거
-   * 2) DB에 이미 존재하는 sourceUrl은 제외
-   * 3) 나머지 새 기사만 bulk insert
+   * 크롤링 결과를 LegalNews 테이블에 저장 (sourceUrl 기준 중복 제외)
    */
-  async saveArticlesToDb(articles: LawTimesArticle[]): Promise<{
+  async saveArticlesToDb(articles: LtnArticle[]): Promise<{
     total: number;
     created: number;
     skipped: number;
     newTitles: string[];
   }> {
     if (articles.length === 0) {
-      this.logger.log('[LawTimes] 저장할 기사 없음');
+      this.logger.log('[LTN] 저장할 기사 없음');
       return { total: 0, created: 0, skipped: 0, newTitles: [] };
     }
 
-    printSection('2. DB 동기화 (법원 뉴스)', '◆');
+    printSection('2. DB 동기화 (법률방송뉴스)', '◆');
     printStep('기존 DB 분석', '중복 URL 제거');
 
     const sourceUrls = articles.map((a) => a.url);
@@ -301,7 +318,7 @@ export class LawTimesService {
 
     if (newArticles.length === 0) {
       this.logger.log(
-        `[LawTimes] 새로 저장할 기사 없음 (이미 ${articles.length}건 존재)`,
+        `[LTN] 새로 저장할 기사 없음 (이미 ${articles.length}건 존재)`,
       );
       return {
         total: articles.length,
@@ -322,7 +339,7 @@ export class LawTimesService {
       description: a.description || null,
       content: a.content,
       reporter: a.reporter || null,
-      publishedAt: parsePublishedDate(a.date),
+      publishedAt: parseLtnDate(a.date),
     }));
 
     await this.prisma.legalNews.createMany({
@@ -331,10 +348,10 @@ export class LawTimesService {
     });
 
     this.logger.log(
-      `[LawTimes] DB 저장 완료 - 새로 추가: ${newArticles.length}건 / 전체: ${articles.length}건`,
+      `[LTN] DB 저장 완료 - 새로 추가: ${newArticles.length}건 / 전체: ${articles.length}건`,
     );
 
-    printSuccess('법원 뉴스 DB 동기화 완료');
+    printSuccess('법률방송뉴스 DB 동기화 완료');
 
     return {
       total: articles.length,
@@ -344,9 +361,6 @@ export class LawTimesService {
     };
   }
 
-  /**
-   * 3페이지까지 크롤링 + DB 저장까지 한 번에 수행
-   */
   async crawlAndSaveRecent(pages: number = 3): Promise<{
     total: number;
     created: number;
@@ -356,4 +370,14 @@ export class LawTimesService {
     const articles = await this.crawlRecent(pages);
     return this.saveArticlesToDb(articles);
   }
+}
+
+/** ltn 날짜 형식 "2026.03.17 09:04" → Date */
+function parseLtnDate(dateStr: string): Date | null {
+  if (!dateStr) return null;
+  const normalized = dateStr.replace(
+    /^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})/,
+    '$1-$2-$3 $4:$5',
+  );
+  return parsePublishedDate(normalized);
 }
